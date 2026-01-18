@@ -1,17 +1,25 @@
 from __future__ import annotations
+import bisect
 from collections import Counter
-import itertools
+from itertools import accumulate
 import random
-from typing import Iterable, Iterator
+from typing import Iterator
 
 class Dice:
-    def __init__(self, sides: int, count: int=1):
+    def __init__(self, faces: int, count: int=1):
+        """Stochastic dice
+
+        Args:
+            faces (int): Dice faces
+            count (int, optional): Number of dice. Defaults to 1.
+        """
         self.count = count
-        self.sides = sides
+        self.faces = faces
+        self._is_stats_stale = False
     
     @property
     def count(self) -> int:
-        """Number of dice
+        """Number of dice.
 
         Returns:
             int: number of dice
@@ -20,7 +28,7 @@ class Dice:
     
     @count.setter
     def count(self, count: int):
-        """Number of dice
+        """Number of dice. Intended for internal use.
 
         Args:
             count (int): number of dice
@@ -32,18 +40,74 @@ class Dice:
         if not isinstance(count, int):
             raise TypeError(f"count was {type(count).__name__}, expected int.")
         if count < 1:
-            raise ValueError(f"count was {count}, expected sides > 0.")
+            raise ValueError(f"count was {count}, expected faces > 0.")
         self._count = count
+        self._is_stats_stale = True
     
     @property
-    def sides(self) -> int:
-        """Dice sides
+    def faces(self) -> int:
+        """Dice faces.
 
         Returns:
-            int: dice sides
+            int: dice faces
         """
-        return self._sides
+        return self._faces
     
+    @faces.setter
+    def faces(self, faces: int):
+        """Dice faces. Intended for internal use.
+
+        Args:
+            faces (int): dice faces
+
+        Raises:
+            TypeError: not an int
+            ValueError: not 1 or higher
+        """
+        if not isinstance(faces, int):
+            raise TypeError(f"faces was {type(faces).__name__}, expected int.")
+        if faces < 1:
+            raise ValueError(f"faces was {faces}, expected faces > 0.")
+        self._faces = faces
+        self._is_stats_stale = True
+    
+    def _check_stats(self):
+        if self._is_stats_stale:
+            self._update_stats()
+    
+    def _update_stats(self):
+        self._stats_min = self.count
+        self._stats_max = self.faces * self.count
+        self._stats_range = self._stats_max - self._stats_min
+        self._stats_mid = (self._stats_min + self._stats_max) // 2
+        self._stats_mean = (self._stats_min + self._stats_max) / 2
+
+        counts = Counter(range(1, self.faces + 1))
+        for _ in range(self.count - 1):
+            new_counts = Counter()
+            for total, freq in counts.items():
+                for face in range(1, self.faces + 1):
+                    new_counts[total + face] += freq
+            counts = new_counts
+
+        self._stats_mode = counts.most_common(1)[0][0]
+
+        rolls = sorted(counts.items())          # [(roll, freq), ...]
+        freqs = [freq for _, freq in rolls]
+        cum = list(accumulate(freqs))
+        total = cum[-1]
+
+        def nth(n):
+            idx = bisect.bisect_right(cum, n)
+            return rolls[idx][0]
+
+        if total % 2:
+            self._stats_median = nth(total // 2)
+        else:
+            self._stats_median = (nth(total // 2 - 1) + nth(total // 2)) / 2
+            
+        self._is_stats_stale = False
+
     @property
     def stats_min(self) -> int:
         """Lowest possible result of the dice pool (all dice roll 1).
@@ -51,7 +115,8 @@ class Dice:
         Returns:
             int: lowest possible result
         """
-        return self.count
+        self._check_stats()
+        return self._stats_min
     
     @property
     def stats_max(self) -> int:
@@ -60,7 +125,8 @@ class Dice:
         Returns:
             int: highest possible result
         """
-        return self.sides * self.count
+        self._check_stats()
+        return self._stats_max
     
     @property
     def stats_range(self) -> int:
@@ -69,7 +135,8 @@ class Dice:
         Returns:
             int: difference
         """
-        return self.stats_max - self.stats_min
+        self._check_stats()
+        return self._stats_range
 
     @property
     def stats_midpoint(self) -> int:
@@ -78,7 +145,8 @@ class Dice:
         Returns:
             int: midpoint
         """
-        return (self.stats_min + self.stats_max) // 2
+        self._check_stats()
+        return self._stats_mid
     
     @property
     def stats_mean(self) -> float:
@@ -87,7 +155,8 @@ class Dice:
         Returns:
             float: mean
         """
-        return (self.stats_min + self.stats_max) / 2
+        self._check_stats()
+        return self._stats_mean
     
     @property
     def stats_median(self) -> float:
@@ -96,29 +165,8 @@ class Dice:
         Returns:
             float: median
         """
-        counts = self.stats_counts
-        rolls = tuple(counts)
-        n = len(rolls)
-        nm = n // 2
-        if n % 2 == 0:
-            return (rolls[nm] + rolls[nm + 1]) / 2
-        return rolls[nm]
-    
-    @property
-    def stats_counts(self) -> Counter[int]:
-        """Calculates potential dice totals using iterative combinations
-
-        Returns:
-            Counter[int]: results
-        """
-        counts = Counter(range(1, self.sides + 1))
-        for _ in range(self.count - 1):
-            new_counts = Counter()
-            for total, freq in counts.items():
-                for face in range(1, self.sides + 1):
-                    new_counts[total + face] += freq
-            counts = new_counts
-        return counts
+        self._check_stats()
+        return self._stats_median
     
     @property
     def stats_mode(self) -> int:
@@ -127,25 +175,8 @@ class Dice:
         Returns:
             int: mode result
         """
-        counts = self.stats_counts
-        return counts.most_common(1)[0][0]
-    
-    @sides.setter
-    def sides(self, sides: int):
-        """Dice sides
-
-        Args:
-            sides (int): dice sides
-
-        Raises:
-            TypeError: not an int
-            ValueError: not 1 or higher
-        """
-        if not isinstance(sides, int):
-            raise TypeError(f"sides was {type(sides).__name__}, expected int.")
-        if sides < 1:
-            raise ValueError(f"sides was {sides}, expected sides > 0.")
-        self._sides = sides
+        self._check_stats()
+        return self._stats_mode
         
     def roll_one(self) -> int:
         """Roll a single dice in the pool
@@ -153,7 +184,7 @@ class Dice:
         Returns:
             int: roll result
         """
-        return random.randint(1, self.sides)    
+        return random.randint(1, self.faces) if self.faces > 1 else 1    
     
     def roll_iter(self) -> Iterator[int]:
         """Roll the dice in the pool
@@ -164,7 +195,7 @@ class Dice:
         Yields:
             Iterator[int]: all roll results
         """
-        return (self.roll_one() for _ in range(self.count))
+        return (self.roll_one() for _ in range(self.count)) if self.faces > 1 else (1 for _ in range(self.count))
     
     def roll_all(self) -> int:
         """Roll then total the dice in the pool
@@ -172,7 +203,7 @@ class Dice:
         Returns:
             int: sum of all rolls
         """
-        return sum(self.roll_iter()) 
+        return sum(self.roll_iter()) if self.faces > 1 else self.count
         
     def roll(self) -> int:
         """Chooses between Dice.roll_one() or Dice.roll_all() depending on dice pool size
@@ -244,7 +275,7 @@ class Dice:
         """
         if not isinstance(other, Dice): 
             raise TypeError(f"other was {type(other).__name__}, expected; Dice")
-        return self.count == other.count and self.sides == other.sides
+        return self.count == other.count and self.faces == other.faces
     
     def roll_against(self, other: Dice | int | float) -> int:
         """This is a stochastic comparison helper. Not meant for stable ordering.\n
@@ -282,30 +313,70 @@ class Dice:
         return self.roll_iter()
     
     def __repr__(self) -> str:
-        return f'Dice(count={self.count},sides={self.sides})'
+        return f'Dice(count={self.count},faces={self.faces})'
     
     def __str__(self) -> str:
-        return f'{self.count}d{self.sides}'
+        return f'{self.count}d{self.faces}'
     
 class DiceUtils:
     @staticmethod
     def d4(count=1) -> Dice:
+        """Factory method for d4s
+
+        Args:
+            count (int, optional): Number of dice. Defaults to 1.
+
+        Returns:
+            Dice: d4s
+        """
         return Dice(4, count)
     
     @staticmethod
     def d6(count=1) -> Dice:
+        """Factory method for d6s
+
+        Args:
+            count (int, optional): Number of dice. Defaults to 1.
+
+        Returns:
+            Dice: d6s
+        """
         return Dice(6, count)
     
     @staticmethod
     def d8(count=1) -> Dice:
+        """Factory method for d8s
+
+        Args:
+            count (int, optional): Number of dice. Defaults to 1.
+
+        Returns:
+            Dice: d8s
+        """
         return Dice(8, count)
     
     @staticmethod
     def d10(count=1) -> Dice:
+        """Factory method for d10s
+
+        Args:
+            count (int, optional): Number of dice. Defaults to 1.
+
+        Returns:
+            Dice: d10s
+        """
         return Dice(10, count)
     
     @staticmethod
     def d12(count=1) -> Dice:
+        """Factory method for d12s
+
+        Args:
+            count (int, optional): Number of dice. Defaults to 1.
+
+        Returns:
+            Dice: d12s
+        """
         return Dice(12, count)
     
     @staticmethod
@@ -336,40 +407,72 @@ class DiceUtils:
 
     @staticmethod
     def roll_exploding_iter(die: Dice, max_explosions: int = -1) -> Iterator[int]:
-        """Rolls a die repeatedly. Stops when it rolls lower than its maximum.
+        """Rolls a single die iteratively. Stops when it rolls lower than its maximum.\n
+        Yields infinitely if attempting to roll a single faced die without an explosion limit.
 
         Args:
-            die (Dice): _description_
-            max_explosions (int, optional): _description_. Defaults to -1.
+            die (Dice): Die being rolled
+            max_explosions (int, optional): Explosion limit or -1 if unlimited. Defaults to -1.
 
         Raises:
-            ValueError: _description_
+            ValueError: Attempted to use a dice pool instead of a single die
+
+        Returns:
+            int | float: Current dice roll or infinity
 
         Yields:
-            Iterator[int]: _description_
+            Iterator[int]: Dice roller
         """
-        if die.sides <= 1 and max_explosions == -1:
-            raise ValueError("Cannot explode a 1-sided die without a max_explosions limit.")
-        
+        if die.count != 1:
+            raise ValueError(f"Die had a count of {die.count}, expected count of 1.")
+
+        if die.sides == 1:
+            if max_explosions < 0:
+                while True:
+                    yield 1
+            else:
+                for _ in range(max_explosions):
+                    yield 1
+            return
+
         explosions = 0
-        while max_explosions == -1 or explosions < max_explosions:
+        while max_explosions < 0 or explosions < max_explosions:
             roll = die()
             yield roll
             explosions += 1
-            if roll < die.sides:
-                break
+            if roll < die.faces:
+                return
     
-    @staticmethod
-    def roll_exploding_list(die: Dice, max_explosions: int = -1) -> list[int]:
-        #"""Rolls a single die and explodes if the maximum value is rolled. 
+    #"""Rolls a single die and explodes if the maximum value is rolled. 
         #High speed, minimal boiler plate and reusable result."""
-        if die.sides <= 1 and max_explosions == -1:
-            raise ValueError("Cannot explode a 1-sided die without a max_explosions limit.")
+    @staticmethod
+    def roll_exploding_list(die: Dice, max_explosions: int = -1) -> list[int] | None:
+        """Rolls a die repeatedly. Stops when it rolls lower than its maximum.
+        Returns None if attempting to roll a single faced die without an explosion limit.
+
+        Args:
+            die (Dice): Dice type used
+            max_explosions (int, optional): Explosion limit or -1 if unlimited. Defaults to -1.
+
+        Raises:
+            ValueError: Attempted to use a dice pool instead of a single die
+
+        Returns:
+            list[int] | None: Sequence of rolls or None if unbounded
+        """
+        if die.count != 1:
+            raise ValueError(f"Die had a count of {die.count}, expected count of 1.")
+        
+        if die.sides == 1:
+            if max_explosions < 0:
+                return None
+            else:
+                return [1] * max_explosions
         
         rolls = []
-        while max_explosions == -1 or len(rolls) < max_explosions:
+        while max_explosions < 0 or len(rolls) < max_explosions:
             rolls.append(roll := die.roll_one())
-            if roll < die.sides:
+            if roll < die.faces:
                 break
         return rolls
     
